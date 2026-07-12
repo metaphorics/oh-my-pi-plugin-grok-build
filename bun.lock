@@ -11,6 +11,10 @@
         "bun-types": "latest",
         "typescript": "^5",
       },
+      "peerDependencies": {
+        "@oh-my-pi/pi-ai": ">=16.4.6",
+        "@oh-my-pi/pi-catalog": ">=16.4.6",
+      },
     },
   },
   "packages": {

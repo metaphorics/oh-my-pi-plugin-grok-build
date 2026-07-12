@@ -27,7 +27,8 @@ omp -e /path/to/oh-my-pi-plugin-grok-build/src/index.ts
 1. Start `omp` with the extension installed or loaded.
 2. Run `/login`.
 3. Select **xAI Grok Build**.
-4. Paste a Grok Build OAuth refresh token, or leave the prompt blank to continue through browser PKCE login.
+4. Complete the browser PKCE flow using the opened browser or copyable authorization URL.
+5. While the callback is pending, `/login <OAuth refresh token>` applies a refresh token directly as the manual fallback.
 
 Credentials are stored and refreshed through omp's normal OAuth credential store.
 
@@ -48,7 +49,7 @@ omp --model xai-grok-build/grok-4.5
 
 ## Limitations
 
-- Paste input is not masked on omp versions whose `OAuthPrompt` does not support `secret`.
+- Manual refresh-token input requires omp 16.4.6 or newer. Keep the terminal private while entering the token.
 - A stock host cannot enforce OAuth-only credentials at the same core boundary as a built-in provider. A runtime `--api-key` override is therefore not blocked by this extension.
 - Remote auth-broker callback-port forwarding is unavailable because `CALLBACK_PORTS` is core-owned. Browser login uses local callback port `8086`.
 - The extension becomes inert when the host already provides `xai-grok-build`, avoiding duplicate provider registration.

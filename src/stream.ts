@@ -1,6 +1,8 @@
 import { streamSimple } from "@oh-my-pi/pi-ai";
 import type { Api, Context, FetchImpl, Model, ProviderSessionState, SimpleStreamOptions } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
+import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import {
 	BASE_URL,
 	CLIENT_IDENTIFIER,
@@ -61,7 +63,12 @@ export function streamGrokBuild(model: Model<Api>, context: Context, options?: S
 		return innerFetch(input, { ...init, headers, redirect: "error" });
 	}, innerFetch.preconnect ? { preconnect: innerFetch.preconnect } : {});
 
-	return streamSimple({ ...model, api: "openai-responses" }, context, {
+	const responsesModel = buildModel({
+		...model,
+		api: "openai-responses",
+		compat: model.compatConfig,
+	} as ModelSpec<"openai-responses">) as Model<Api>;
+	return streamSimple(responsesModel, context, {
 		...options,
 		providerSessionState,
 		fetch: wrappedFetch,

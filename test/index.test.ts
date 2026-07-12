@@ -10,6 +10,7 @@ interface ChildResult {
 	api: string | undefined;
 	handlerIdentitiesMatch: boolean;
 	apiKey: string | undefined;
+	manualInputEnabled: boolean;
 	collisionRegistrationCount: number;
 	collisionLogs: string[];
 }
@@ -17,6 +18,7 @@ interface ChildResult {
 const pluginUrl = new URL("../src/index.ts", import.meta.url).href;
 const childScript = `
 import plugin from ${JSON.stringify(pluginUrl)};
+import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders, registerOAuthProvider } from "@oh-my-pi/pi-ai/oauth";
 import { BASE_URL, CUSTOM_API_ID, PROVIDER_ID } from ${JSON.stringify(new URL("../src/constants.ts", import.meta.url).href)};
 import { fetchGrokBuildModels } from ${JSON.stringify(new URL("../src/models.ts", import.meta.url).href)};
@@ -41,6 +43,7 @@ const handlerIdentitiesMatch = config !== undefined &&
   config.oauth?.login === loginGrokBuild &&
   config.oauth?.refreshToken === refreshGrokBuildToken;
 const apiKey = config?.oauth?.getApiKey({ access: "access-token", refresh: "refresh-token", expires: 1 });
+const manualInputEnabled = PASTE_CODE_LOGIN_PROVIDERS.has(PROVIDER_ID);
 
 if (!initialCollision) {
   registerOAuthProvider({
@@ -63,13 +66,14 @@ process.stdout.write(JSON.stringify({
   api: config?.api,
   handlerIdentitiesMatch,
   apiKey,
+  manualInputEnabled,
   collisionRegistrationCount,
   collisionLogs,
 }));
 `;
 
 test("provider registration and collision behavior are correct in an isolated registry", async () => {
-	expect(getOAuthProviders().some(provider => provider.id === PROVIDER_ID)).toBe(false);
+	const parentProviders = getOAuthProviders().map(provider => provider.id);
 	const child = Bun.spawn([process.execPath, "--eval", childScript], {
 		cwd: `${import.meta.dir}/..`,
 		stdout: "pipe",
@@ -80,7 +84,7 @@ test("provider registration and collision behavior are correct in an isolated re
 		new Response(child.stderr).text(),
 		child.exited,
 	]);
-	expect(getOAuthProviders().some(provider => provider.id === PROVIDER_ID)).toBe(false);
+	expect(getOAuthProviders().map(provider => provider.id)).toEqual(parentProviders);
 	expect(exitCode, stderr).toBe(0);
 	const result = JSON.parse(stdout) as ChildResult;
 	expect(result.initialCollision).toBe(false);
@@ -90,6 +94,7 @@ test("provider registration and collision behavior are correct in an isolated re
 	expect(result.api).toBe("xai-grok-build-responses");
 	expect(result.handlerIdentitiesMatch).toBe(true);
 	expect(result.apiKey).toBe("access-token");
+	expect(result.manualInputEnabled).toBe(true);
 	expect(result.collisionRegistrationCount).toBe(0);
 	expect(result.collisionLogs).toEqual(["xai-grok-build already provided by host; extension inert"]);
 });

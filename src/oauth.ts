@@ -1,7 +1,7 @@
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { OAuthCallbackFlow } from "@oh-my-pi/pi-ai/oauth/callback-server";
 import { generatePKCE } from "@oh-my-pi/pi-ai/oauth/pkce";
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt } from "@oh-my-pi/pi-ai/oauth/types";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import {
 	CALLBACK_PORT,
@@ -15,6 +15,8 @@ import {
 const ACCESS_TOKEN_CLIENT_SKEW_MS = 5 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
+const MANUAL_REFRESH_INSTRUCTIONS =
+	"Manual fallback: run /login <OAuth refresh token>. This provider expects a refresh token, not a redirect URL.";
 
 interface GrokBuildDiscovery {
 	authorization_endpoint: string;
@@ -23,9 +25,6 @@ interface GrokBuildDiscovery {
 }
 
 type DiscoveryEndpoint = keyof GrokBuildDiscovery;
-type GrokBuildPrompt = OAuthPrompt & { allowEmpty?: boolean; secret?: boolean };
-
-const PASTE_ENDPOINTS: readonly DiscoveryEndpoint[] = ["token_endpoint", "userinfo_endpoint"];
 const BROWSER_ENDPOINTS: readonly DiscoveryEndpoint[] = [
 	"authorization_endpoint",
 	"token_endpoint",
@@ -281,6 +280,7 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string;
 	#challenge: string;
 	#fetch: FetchImpl;
+	#manualRefreshToken: { value?: string };
 
 	constructor(
 		callbacks: OAuthLoginCallbacks,
@@ -288,19 +288,34 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 		pkce: { verifier: string; challenge: string },
 		fetchImpl: FetchImpl,
 	) {
-		super(callbacks, {
-			preferredPort: CALLBACK_PORT,
-			allowPortFallback: false,
-			callbackHostname: "127.0.0.1",
-			callbackPath: "/callback",
-		});
+		const manualRefreshToken: { value?: string } = {};
+		const onManualCodeInput = callbacks.onManualCodeInput;
+		super(
+			onManualCodeInput
+				? {
+						...callbacks,
+						onManualCodeInput: async () => {
+							const input = (await onManualCodeInput()).trim();
+							manualRefreshToken.value = input || undefined;
+							return input ? "grok-build-refresh-token" : "";
+						},
+					}
+				: callbacks,
+			{
+				preferredPort: CALLBACK_PORT,
+				allowPortFallback: false,
+				callbackHostname: "127.0.0.1",
+				callbackPath: "/callback",
+			},
+		);
 		this.#discovery = discovery;
 		this.#verifier = pkce.verifier;
 		this.#challenge = pkce.challenge;
 		this.#fetch = fetchImpl;
+		this.#manualRefreshToken = manualRefreshToken;
 	}
 
-	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string }> {
+	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
 		const params = new URLSearchParams({
 			response_type: "code",
 			client_id: OAUTH_CLIENT_ID,
@@ -312,7 +327,10 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 			nonce: crypto.randomUUID(),
 			referrer: OAUTH_REFERRER,
 		});
-		return { url: `${this.#discovery.authorization_endpoint}?${params.toString()}` };
+		return {
+			url: `${this.#discovery.authorization_endpoint}?${params.toString()}`,
+			instructions: MANUAL_REFRESH_INSTRUCTIONS,
+		};
 	}
 
 	generateState(): string {
@@ -321,6 +339,16 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 
 	async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
 		throwIfCancelled(this.ctrl.signal);
+		const manualRefreshToken = this.#manualRefreshToken.value;
+		if (manualRefreshToken) {
+			const credentials = await exchangeRefreshToken(
+				this.#discovery.token_endpoint,
+				manualRefreshToken,
+				this.#fetch,
+				this.ctrl.signal,
+			);
+			return attachUserInfo(credentials, this.#discovery.userinfo_endpoint, this.#fetch, this.ctrl.signal);
+		}
 		let response: Response;
 		try {
 			response = await this.#fetch(this.#discovery.token_endpoint, {
@@ -374,32 +402,6 @@ export async function loginGrokBuild(callbacks: OAuthLoginCallbacks): Promise<OA
 	const fetchImpl = callbacks.fetch ?? fetch;
 	try {
 		throwIfCancelled(callbacks.signal);
-		const prompt: GrokBuildPrompt = {
-			message: "Paste a Grok Build OAuth refresh token, or leave blank to sign in in your browser",
-			allowEmpty: true,
-			secret: true,
-		};
-		let pasted = "";
-		try {
-			pasted = await callbacks.onPrompt(prompt);
-		} catch (error) {
-			if (error instanceof AIError.LoginCancelledError) throw error;
-			if (callbacks.signal?.aborted || (error instanceof Error && error.name === "AbortError")) {
-				throw new AIError.LoginCancelledError();
-			}
-		}
-		throwIfCancelled(callbacks.signal);
-		const refreshToken = pasted.trim();
-		if (refreshToken) {
-			const discovery = await discover(fetchImpl, PASTE_ENDPOINTS, callbacks.signal);
-			const credentials = await exchangeRefreshToken(
-				discovery.token_endpoint,
-				refreshToken,
-				fetchImpl,
-				callbacks.signal,
-			);
-			return attachUserInfo(credentials, discovery.userinfo_endpoint, fetchImpl, callbacks.signal);
-		}
 		const discovery = await discover(fetchImpl, BROWSER_ENDPOINTS, callbacks.signal);
 		const pkce = await generatePKCE();
 		throwIfCancelled(callbacks.signal);

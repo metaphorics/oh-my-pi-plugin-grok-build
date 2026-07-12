@@ -1,7 +1,7 @@
 import { afterEach, expect, mock, spyOn, test } from "bun:test";
 import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
-import type { OAuthCredentials, OAuthLoginCallbacks, OAuthPrompt } from "@oh-my-pi/pi-ai/oauth/types";
+import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { OAUTH_CLIENT_ID, OAUTH_DISCOVERY_URL, OAUTH_REFERRER, OAUTH_SCOPE } from "../src/constants.js";
 import { loginGrokBuild, refreshGrokBuildToken } from "../src/oauth.js";
 
@@ -13,7 +13,6 @@ const DISCOVERY = {
 
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-type ExtendedPrompt = OAuthPrompt & { allowEmpty?: boolean; secret?: boolean };
 
 afterEach(() => mock.restore());
 
@@ -43,19 +42,22 @@ function tokenResponse(refresh?: string): Response {
 test.each([
 	["rotated-refresh", "rotated-refresh"],
 	[undefined, "pasted-refresh"],
-] as const)("paste login preserves refresh rotation semantics", async (returnedRefresh, expectedRefresh) => {
-	let prompt: ExtendedPrompt | undefined;
+] as const)("manual /login token input preserves refresh rotation", async (returnedRefresh, expectedRefresh) => {
 	let tokenForm: URLSearchParams | undefined;
 	let discoveryRedirect: RequestRedirect | undefined;
 	let tokenRedirect: RequestRedirect | undefined;
 	let userinfoRedirect: RequestRedirect | undefined;
-	let authCalls = 0;
+	let authInstructions: string | undefined;
+	let promptCalls = 0;
 	const callbacks: OAuthLoginCallbacks = {
-		onAuth: () => authCalls++,
-		onPrompt: async received => {
-			prompt = received as ExtendedPrompt;
-			return "  pasted-refresh  ";
+		onAuth: info => {
+			authInstructions = info.instructions;
 		},
+		onPrompt: async () => {
+			promptCalls++;
+			throw new Error("browser-first login must not prompt");
+		},
+		onManualCodeInput: async () => "  pasted-refresh  ",
 		fetch: async (input, init) => {
 			const url = String(input);
 			if (url === OAUTH_DISCOVERY_URL) {
@@ -87,22 +89,25 @@ test.each([
 	expect(credentials.refresh).toBe(expectedRefresh);
 	expect(credentials.accountId).toBe("account-123");
 	expect(credentials.email).toBe("user@example.com");
-	expect(prompt?.allowEmpty).toBe(true);
-	expect(prompt?.secret).toBe(true);
-	expect(authCalls).toBe(0);
+	expect(authInstructions).toContain("/login <OAuth refresh token>");
+	expect(promptCalls).toBe(0);
 });
 
-test("a generic prompt rejection completes browser PKCE with redirect-safe token exchange", async () => {
+test("browser-first login completes PKCE without prompting", async () => {
 	let authorizationUrl = "";
+	let authInstructions: string | undefined;
+	let promptCalls = 0;
 	let callbackStatus: Promise<number> | undefined;
 	let tokenForm: URLSearchParams | undefined;
 	let tokenRedirect: RequestRedirect | undefined;
 	const login = loginGrokBuild({
 		onPrompt: async () => {
-			throw new Error("prompting unavailable");
+			promptCalls++;
+			throw new Error("browser-first login must not prompt");
 		},
 		onAuth: info => {
 			authorizationUrl = info.url;
+			authInstructions = info.instructions;
 			const state = new URL(info.url).searchParams.get("state");
 			const callbackUrl = `http://127.0.0.1:8086/callback?code=browser-code&state=${state}`;
 			callbackStatus = globalThis.fetch(callbackUrl).then(response => response.status);
@@ -121,6 +126,8 @@ test("a generic prompt rejection completes browser PKCE with redirect-safe token
 	});
 
 	const credentials = await login;
+	expect(authInstructions).toContain("/login <OAuth refresh token>");
+	expect(promptCalls).toBe(0);
 	expect(await callbackStatus).toBe(200);
 	const params = new URL(authorizationUrl).searchParams;
 	expect([...params.keys()].sort()).toEqual(
@@ -161,12 +168,15 @@ test("a generic prompt rejection completes browser PKCE with redirect-safe token
 	expect(credentials.accountId).toBe("browser-account");
 });
 
-test("explicit login cancellation does not start discovery", async () => {
+test("a pre-cancelled login does not start discovery", async () => {
+	const controller = new AbortController();
+	controller.abort();
 	let fetchCalls = 0;
 	const callbacks: OAuthLoginCallbacks = {
+		signal: controller.signal,
 		onAuth: () => {},
 		onPrompt: async () => {
-			throw new AIError.LoginCancelledError();
+			throw new Error("cancelled login must not prompt");
 		},
 		fetch: async () => {
 			fetchCalls++;

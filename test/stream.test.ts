@@ -2,34 +2,32 @@ import { expect, test } from "bun:test";
 import type { Api, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
+import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
 import { BASE_URL, CLIENT_IDENTIFIER, CLIENT_VERSION, TOKEN_AUTH, USER_AGENT } from "../src/constants.js";
 import { streamGrokBuild } from "../src/stream.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-const MODEL = {
-	...buildModel({
-		api: "openai-responses",
-		provider: "xai-grok-build",
-		id: "grok-4.5",
-		name: "Grok 4.5",
-		baseUrl: BASE_URL,
-		reasoning: true,
-		input: ["text", "image"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 500_000,
-		maxTokens: 500_000,
-		compat: {
-			reasoningEffortMap: { minimal: "low" },
-			includeEncryptedReasoning: false,
-			filterReasoningHistory: true,
-			supportsImageDetailOriginal: false,
-			omitReasoningEffort: false,
-			supportsReasoningEffort: true,
-		},
-	}),
-	api: "xai-grok-build-responses" as Api,
-} as Model<Api>;
+const MODEL = buildModel({
+	api: "xai-grok-build-responses",
+	provider: "xai-grok-build",
+	id: "grok-4.5",
+	name: "Grok 4.5",
+	baseUrl: BASE_URL,
+	reasoning: true,
+	input: ["text", "image"],
+	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+	contextWindow: 500_000,
+	maxTokens: 500_000,
+	compat: {
+		reasoningEffortMap: { minimal: "low" },
+		includeEncryptedReasoning: false,
+		filterReasoningHistory: true,
+		supportsImageDetailOriginal: false,
+		omitReasoningEffort: false,
+		supportsReasoningEffort: true,
+	},
+} as ModelSpec<Api>) as Model<Api>;
 const CONTEXT: Context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] };
 
 function completedSse(text: string): Response {
@@ -88,6 +86,7 @@ interface CapturedRequest {
 }
 
 test("streaming delegates Responses events and preserves per-session request identity", async () => {
+	expect(MODEL.compat).toBeUndefined();
 	const captured: CapturedRequest[] = [];
 	const fetchMock: FetchImpl = async (input, init) => {
 		captured.push({
