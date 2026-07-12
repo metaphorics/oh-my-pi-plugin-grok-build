@@ -10,6 +10,12 @@ Install the npm package:
 omp plugin install oh-my-pi-plugin-grok-build
 ```
 
+Install with github:
+
+```sh
+omp plugin install https://github.com/metaphorics/oh-my-pi-plugin-grok-build
+```
+
 Link a local checkout:
 
 ```sh
