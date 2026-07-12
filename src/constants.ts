@@ -1,0 +1,15 @@
+export const PROVIDER_ID = "xai-grok-build";
+export const PROVIDER_LABEL = "xAI Grok Build";
+export const CUSTOM_API_ID = "xai-grok-build-responses";
+export const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
+export const USER_AGENT = "grok-shell/0.2.93 (linux; x86_64)";
+export const CLIENT_IDENTIFIER = "grok-shell";
+export const CLIENT_VERSION = "0.2.93";
+export const TOKEN_AUTH = "xai-grok-cli";
+export const OAUTH_ISSUER = "https://auth.x.ai";
+export const OAUTH_DISCOVERY_URL = `${OAUTH_ISSUER}/.well-known/openid-configuration`;
+export const OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
+export const OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access conversations:read conversations:write";
+export const OAUTH_REFERRER = "grok-build";
+export const CALLBACK_PORT = 8086;
+export const NON_CHAT_PREFIXES = ["grok-imagine-", "grok-stt-", "grok-voice-"] as const;
