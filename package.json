@@ -1,0 +1,33 @@
+{
+  "name": "oh-my-pi-plugin-grok-build",
+  "version": "0.1.0",
+  "description": "oh-my-pi extension: xAI Grok Build subscription provider (OAuth login, model discovery, Responses streaming)",
+  "type": "module",
+  "omp": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "bun test ./test",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@oh-my-pi/pi-coding-agent": "latest",
+    "@oh-my-pi/pi-ai": "latest",
+    "@oh-my-pi/pi-catalog": "latest",
+    "bun-types": "latest",
+    "typescript": "^5"
+  },
+  "keywords": [
+    "oh-my-pi",
+    "omp",
+    "plugin",
+    "xai",
+    "grok",
+    "grok-build",
+    "oauth",
+    "provider"
+  ],
+  "license": "MIT"
+}
