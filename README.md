@@ -38,6 +38,12 @@ omp -e /path/to/oh-my-pi-plugin-grok-build/src/index.ts
 
 Credentials are stored and refreshed through omp's normal OAuth credential store.
 
+## Multiple accounts
+
+Run `/login` again and complete the flow with a different xAI account to add another. Accounts are keyed by the OAuth subject (`sub`): logging into the same account replaces its tokens; a different account is stored alongside.
+
+Account selection and quota ranking are host-owned; this extension deliberately adds no plugin-side balancer. Each omp session sticks to one account via a consistent hash of the session id; without a session, selection round-robins. On 401 or usage-limit 429, the host retries by re-minting the same account's token, then switches the session to a sibling account automatically. Token refresh preserves account identity.
+
 ## Models
 
 The offline seed contains:
