@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import type { Api, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import type { Api, ApiKeyResolveContext, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
@@ -172,4 +172,36 @@ test("non-canonical base URLs fail before fetching", () => {
 		AIError.ConfigurationError,
 	);
 	expect(fetchCalls).toBe(0);
+});
+
+test("streamGrokBuild forwards function apiKey so auth-retry can rotate Authorization", async () => {
+	const captured: CapturedRequest[] = [];
+	const fetchMock: FetchImpl = async (input, init) => {
+		const headers = new Headers(init?.headers);
+		captured.push({
+			url: String(input),
+			method: init?.method,
+			redirect: init?.redirect,
+			body: typeof init?.body === "string" ? init.body : "",
+			headers,
+		});
+		if (headers.get("Authorization") === "Bearer token-a") {
+			return new Response("unauthorized", { status: 401 });
+		}
+		return completedSse("rotated");
+	};
+	const apiKey = (ctx: ApiKeyResolveContext) => (ctx.error === undefined ? "token-a" : "token-b");
+
+	const result = await streamGrokBuild(MODEL, CONTEXT, { apiKey, fetch: fetchMock }).result();
+
+	expect(result.stopReason).not.toBe("error");
+	expect(result.content.find(item => item.type === "text")?.text).toBe("rotated");
+	expect(captured.length).toBeGreaterThanOrEqual(2);
+
+	const first = captured[0].headers;
+	const last = captured[captured.length - 1].headers;
+	expect(first.get("Authorization")).toBe("Bearer token-a");
+	expect(last.get("Authorization")).toBe("Bearer token-b");
+	expect(last.get("x-grok-agent-id")).toBe(first.get("x-grok-agent-id"));
+	expect(last.get("x-grok-session-id")).toBe(first.get("x-grok-session-id"));
 });
