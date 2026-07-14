@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Added multi-account regression coverage: per-account credential identity in the host store, and Authorization rotation through the auth-retry resolver during streaming.
+- Documented multi-account login and host load-balancing semantics in the README.
+
 ## 0.1.1
 
 - Changed xAI Grok Build login to start browser PKCE before offering manual refresh-token input through `/login <token>`.
