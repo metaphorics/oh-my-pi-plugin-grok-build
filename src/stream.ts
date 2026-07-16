@@ -13,6 +13,54 @@ import {
 
 const IDENTITY_KEY = "xai-grok-build:identity";
 
+/**
+ * Appended to 402 bodies so the host auth-retry classifier
+ * (USAGE_LIMIT_PATTERN in @oh-my-pi/pi-ai error/rate-limit.ts, which already
+ * matches `insufficient.?balance` — the DeepSeek canonical phrase) routes the
+ * failure into markUsageLimitReached → sibling-account rotation instead of a
+ * hard error. The host does not recognize xAI's "usage balance exhausted"
+ * phrasing or HTTP 402 as a usage limit. Remove once the host classifier does.
+ */
+const QUOTA_MARKER = "insufficient balance";
+
+function isRecord(value: object | null): value is Record<string, object | string | number | boolean | null> {
+	return value !== null && !Array.isArray(value);
+}
+
+async function normalizeQuotaExhaustedResponse(response: Response): Promise<Response> {
+	let text = "";
+	try {
+		text = await response.text();
+	} catch {
+		// A consumed or otherwise unreadable quota response still needs a classifiable body.
+	}
+
+	let body: string;
+	try {
+		const parsed: object | string | number | boolean | null = JSON.parse(text);
+		const parsedObject = typeof parsed === "object" ? parsed : null;
+		if (isRecord(parsedObject)) {
+			const error = parsedObject.error;
+			const errorObject = typeof error === "object" ? error : null;
+			if (isRecord(errorObject) && typeof errorObject.message === "string") {
+				errorObject.message = `${errorObject.message} (${QUOTA_MARKER})`;
+				body = JSON.stringify(parsedObject);
+			} else {
+				body = text ? `${text} (${QUOTA_MARKER})` : QUOTA_MARKER;
+			}
+		} else {
+			body = text ? `${text} (${QUOTA_MARKER})` : QUOTA_MARKER;
+		}
+	} catch {
+		body = text ? `${text} (${QUOTA_MARKER})` : QUOTA_MARKER;
+	}
+
+	const headers = new Headers(response.headers);
+	headers.delete("content-length");
+	headers.delete("content-encoding");
+	return new Response(body, { status: response.status, statusText: response.statusText, headers });
+}
+
 interface GrokBuildIdentityState extends ProviderSessionState {
 	agentId: string;
 	sessionId: string;
@@ -60,7 +108,9 @@ export function streamGrokBuild(model: Model<Api>, context: Context, options?: S
 			headers.set("x-grok-turn-idx", String(turnIndex));
 			headers.set("traceparent", createTraceparent());
 		}
-		return innerFetch(input, { ...init, headers, redirect: "error" });
+		const response = await innerFetch(input, { ...init, headers, redirect: "error" });
+		if (response.status !== 402) return response;
+		return normalizeQuotaExhaustedResponse(response);
 	}, innerFetch.preconnect ? { preconnect: innerFetch.preconnect } : {});
 
 	const responsesModel = buildModel({

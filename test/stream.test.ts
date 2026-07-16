@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { isUsageLimitOutcome } from "@oh-my-pi/pi-ai";
 import type { Api, ApiKeyResolveContext, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -161,6 +162,58 @@ test("upstream HTTP failures end the stream as errors", async () => {
 	expect(result.errorMessage).toContain("400 bad request");
 });
 
+test("402 quota responses remain classifiable by the host usage-limit policy", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () => new Response("Grok Build usage balance exhausted", { status: 402 }),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
+test("402 JSON errors preserve the upstream message and append the quota marker", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(JSON.stringify({ error: { message: "Grok Build usage balance exhausted", code: "quota" } }), {
+				status: 402,
+				headers: { "content-type": "application/json" },
+			}),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toContain("usage balance exhausted");
+	expect(result.errorMessage).toContain("insufficient balance");
+});
+
+test("empty 402 bodies receive a classifiable quota marker", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () => new Response(null, { status: 402 }),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toContain("insufficient balance");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
+test("non-canonical 402 JSON preserves the body and receives a quota marker", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(JSON.stringify({ message: "Grok Build usage balance exhausted" }), {
+				status: 402,
+				headers: { "content-type": "application/json" },
+			}),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toContain("usage balance exhausted");
+	expect(result.errorMessage).toContain("insufficient balance");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
 test("non-canonical base URLs fail before fetching", () => {
 	let fetchCalls = 0;
 	const fetchMock: FetchImpl = async () => {
@@ -204,4 +257,31 @@ test("streamGrokBuild forwards function apiKey so auth-retry can rotate Authoriz
 	expect(last.get("Authorization")).toBe("Bearer token-b");
 	expect(last.get("x-grok-agent-id")).toBe(first.get("x-grok-agent-id"));
 	expect(last.get("x-grok-session-id")).toBe(first.get("x-grok-session-id"));
+});
+
+test("streamGrokBuild rotates to a sibling credential after a 402 quota response", async () => {
+	const captured: CapturedRequest[] = [];
+	const fetchMock: FetchImpl = async (input, init) => {
+		const headers = new Headers(init?.headers);
+		captured.push({
+			url: String(input),
+			method: init?.method,
+			redirect: init?.redirect,
+			body: typeof init?.body === "string" ? init.body : "",
+			headers,
+		});
+		if (headers.get("Authorization") === "Bearer token-a") {
+			return new Response("Grok Build usage balance exhausted", { status: 402 });
+		}
+		return completedSse("rotated");
+	};
+	const apiKey = (ctx: ApiKeyResolveContext) => (ctx.error === undefined ? "token-a" : "token-b");
+
+	const result = await streamGrokBuild(MODEL, CONTEXT, { apiKey, fetch: fetchMock }).result();
+
+	expect(result.stopReason).not.toBe("error");
+	expect(result.content.find(item => item.type === "text")?.text).toBe("rotated");
+	expect(captured).toHaveLength(2);
+	expect(captured[0].headers.get("Authorization")).toBe("Bearer token-a");
+	expect(captured[1].headers.get("Authorization")).toBe("Bearer token-b");
 });
