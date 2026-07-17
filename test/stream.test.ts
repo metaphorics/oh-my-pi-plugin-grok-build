@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { isUsageLimitOutcome } from "@oh-my-pi/pi-ai";
 import type { Api, ApiKeyResolveContext, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -161,6 +162,114 @@ test("upstream HTTP failures end the stream as errors", async () => {
 	expect(result.errorMessage).toContain("400 bad request");
 });
 
+test("402 quota responses remain classifiable by the host usage-limit policy", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () => new Response("Grok Build usage balance exhausted", { status: 402 }),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe("402 Grok Build usage balance exhausted (insufficient balance)");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
+test("402 canonical JSON errors preserve the envelope and append the quota marker", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(
+				JSON.stringify({
+					error: { message: "Grok Build usage balance exhausted", code: "quota" },
+					request_id: "req-canonical",
+				}),
+				{ status: 402, headers: { "content-type": "application/json" } },
+			),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage?.split("\n", 1)[0]).toBe(
+		"402 Grok Build usage balance exhausted (insufficient balance)",
+	);
+});
+
+test("402 flat error strings are normalized through the JSON envelope path", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(JSON.stringify({ error: "Grok Build usage balance exhausted", request_id: "req-error" }), {
+				status: 402,
+				headers: { "content-type": "application/json" },
+			}),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe("402 Grok Build usage balance exhausted (insufficient balance)");
+});
+
+test("402 flat message strings are normalized through the JSON envelope path", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(JSON.stringify({ message: "Grok Build usage balance exhausted", request_id: "req-message" }), {
+				status: 402,
+				headers: { "content-type": "application/json" },
+			}),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe("402 Grok Build usage balance exhausted (insufficient balance)");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
+test("402 JSON without a message preserves provider metadata in valid JSON", async () => {
+	const providerBody = {
+		error: { code: "quota", type: "billing" },
+		request_id: "req-metadata",
+		retry: { after_seconds: 60 },
+	};
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(JSON.stringify(providerBody), {
+				status: 402,
+				headers: { "content-type": "application/json" },
+			}),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	const normalizedBody = JSON.parse(result.errorMessage?.split("\n", 1)[0].replace(/^402 /, "") ?? "");
+	expect(normalizedBody.error).toEqual(providerBody.error);
+	expect(normalizedBody.request_id).toBe(providerBody.request_id);
+	expect(normalizedBody.retry).toEqual(providerBody.retry);
+	expect(normalizedBody.omp_quota_marker).toBe("insufficient balance");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
+test("empty 402 bodies receive a classifiable plain-text quota marker", async () => {
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () => new Response(null, { status: 402 }),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe("402 insufficient balance");
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
+test("malformed 402 JSON remains a raw-text fallback instead of becoming invalid JSON", async () => {
+	const malformedBody = '{"message":"Grok Build usage balance exhausted"';
+	const result = await streamGrokBuild(MODEL, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () =>
+			new Response(malformedBody, { status: 402, headers: { "content-type": "application/json" } }),
+	}).result();
+
+	expect(result.stopReason).toBe("error");
+	expect(result.errorMessage).toBe(`402 ${malformedBody} (insufficient balance)`);
+	expect(() => JSON.parse(result.errorMessage?.replace(/^402 /, "") ?? "")).toThrow();
+	expect(isUsageLimitOutcome(402, result.errorMessage)).toBe(true);
+});
+
 test("non-canonical base URLs fail before fetching", () => {
 	let fetchCalls = 0;
 	const fetchMock: FetchImpl = async () => {
@@ -204,4 +313,31 @@ test("streamGrokBuild forwards function apiKey so auth-retry can rotate Authoriz
 	expect(last.get("Authorization")).toBe("Bearer token-b");
 	expect(last.get("x-grok-agent-id")).toBe(first.get("x-grok-agent-id"));
 	expect(last.get("x-grok-session-id")).toBe(first.get("x-grok-session-id"));
+});
+
+test("streamGrokBuild rotates to a sibling credential after a 402 quota response", async () => {
+	const captured: CapturedRequest[] = [];
+	const fetchMock: FetchImpl = async (input, init) => {
+		const headers = new Headers(init?.headers);
+		captured.push({
+			url: String(input),
+			method: init?.method,
+			redirect: init?.redirect,
+			body: typeof init?.body === "string" ? init.body : "",
+			headers,
+		});
+		if (headers.get("Authorization") === "Bearer token-a") {
+			return new Response("Grok Build usage balance exhausted", { status: 402 });
+		}
+		return completedSse("rotated");
+	};
+	const apiKey = (ctx: ApiKeyResolveContext) => (ctx.error === undefined ? "token-a" : "token-b");
+
+	const result = await streamGrokBuild(MODEL, CONTEXT, { apiKey, fetch: fetchMock }).result();
+
+	expect(result.stopReason).not.toBe("error");
+	expect(result.content.find(item => item.type === "text")?.text).toBe("rotated");
+	expect(captured).toHaveLength(2);
+	expect(captured[0].headers.get("Authorization")).toBe("Bearer token-a");
+	expect(captured[1].headers.get("Authorization")).toBe("Bearer token-b");
 });
