@@ -22,9 +22,41 @@ const IDENTITY_KEY = "xai-grok-build:identity";
  * phrasing or HTTP 402 as a usage limit. Remove once the host classifier does.
  */
 const QUOTA_MARKER = "insufficient balance";
+const QUOTA_MARKER_FIELD = "omp_quota_marker";
 
-function isRecord(value: object | null): value is Record<string, object | string | number | boolean | null> {
-	return value !== null && !Array.isArray(value);
+type JsonPrimitive = string | number | boolean | null;
+type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
+type JsonObject = { [key: string]: JsonValue };
+
+function isJsonObject(value: JsonValue): value is JsonObject {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function appendQuotaMarker(message: string): string {
+	return `${message} (${QUOTA_MARKER})`;
+}
+
+function addQuotaMarker(value: JsonValue): JsonValue {
+	if (!isJsonObject(value)) return { value, message: QUOTA_MARKER };
+
+	const error = value.error;
+	if (isJsonObject(error) && typeof error.message === "string") {
+		error.message = appendQuotaMarker(error.message);
+		return value;
+	}
+	if (typeof error === "string") {
+		value.error = appendQuotaMarker(error);
+		return value;
+	}
+	if (typeof value.message === "string") {
+		value.message = appendQuotaMarker(value.message);
+		return value;
+	}
+
+	let markerField = QUOTA_MARKER_FIELD;
+	while (Object.hasOwn(value, markerField)) markerField = `_${markerField}`;
+	value[markerField] = QUOTA_MARKER;
+	return value;
 }
 
 async function normalizeQuotaExhaustedResponse(response: Response): Promise<Response> {
@@ -36,28 +68,23 @@ async function normalizeQuotaExhaustedResponse(response: Response): Promise<Resp
 	}
 
 	let body: string;
-	try {
-		const parsed: object | string | number | boolean | null = JSON.parse(text);
-		const parsedObject = typeof parsed === "object" ? parsed : null;
-		if (isRecord(parsedObject)) {
-			const error = parsedObject.error;
-			const errorObject = typeof error === "object" ? error : null;
-			if (isRecord(errorObject) && typeof errorObject.message === "string") {
-				errorObject.message = `${errorObject.message} (${QUOTA_MARKER})`;
-				body = JSON.stringify(parsedObject);
-			} else {
-				body = text ? `${text} (${QUOTA_MARKER})` : QUOTA_MARKER;
-			}
-		} else {
-			body = text ? `${text} (${QUOTA_MARKER})` : QUOTA_MARKER;
+	let parsedJson = false;
+	if (text) {
+		try {
+			const parsed = JSON.parse(text) as JsonValue;
+			body = JSON.stringify(addQuotaMarker(parsed));
+			parsedJson = true;
+		} catch {
+			body = appendQuotaMarker(text);
 		}
-	} catch {
-		body = text ? `${text} (${QUOTA_MARKER})` : QUOTA_MARKER;
+	} else {
+		body = QUOTA_MARKER;
 	}
 
 	const headers = new Headers(response.headers);
 	headers.delete("content-length");
 	headers.delete("content-encoding");
+	headers.set("content-type", parsedJson ? "application/json; charset=utf-8" : "text/plain; charset=utf-8");
 	return new Response(body, { status: response.status, statusText: response.statusText, headers });
 }
 
