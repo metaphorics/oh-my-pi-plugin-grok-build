@@ -1,6 +1,6 @@
 {
   "name": "oh-my-pi-plugin-grok-build",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "oh-my-pi extension: xAI Grok Build subscription provider (OAuth login, model discovery, Responses streaming)",
   "type": "module",
   "omp": {
