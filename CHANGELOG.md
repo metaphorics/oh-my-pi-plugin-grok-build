@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.7
+
+- Changed manual code entry to appear alongside the browser step, racing the local callback the way the host's own paste-code providers do, instead of waiting out a 20-second callback window.
+
 ## 0.1.6
 
 - Added a manual authorization-code prompt to login. It appears once the local callback port has clearly failed, so sign-in still completes when the browser cannot reach this machine.

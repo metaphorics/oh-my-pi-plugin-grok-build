@@ -16,9 +16,6 @@ const ACCESS_TOKEN_CLIENT_SKEW_MS = 5 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
 const MANUAL_CODE_PROMPT = "Paste the authorization code (or full redirect URL):";
-// Grace period before offering the pasted-code prompt. Long enough that a
-// working browser redirect lands first, short enough to stay useful.
-const MANUAL_CODE_PROMPT_DELAY_MS = 20_000;
 
 interface GrokBuildDiscovery {
 	authorization_endpoint: string;
@@ -371,71 +368,19 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 	}
 }
 
-/**
- * Offers the pasted-code prompt only once the loopback callback has clearly
- * failed, then never again.
- *
- * Two host behaviors force this shape. The callback flow re-invokes manual
- * input until it yields a usable code, so a prompt that fails immediately (no
- * TTY, dialog dismissed) would spin and starve the callback. And the CLI's
- * prompt puts the terminal in raw mode, restoring it only when the reader
- * answers, so a prompt still outstanding when login ends leaves the terminal
- * raw. Waiting out the callback window, and standing down once login settles,
- * keeps a working browser login promptless.
- */
-export function lateManualCodePrompt(
-	onPrompt: NonNullable<OAuthLoginCallbacks["onPrompt"]>,
-	isSettled: () => boolean,
-	signal: AbortSignal | undefined,
-	delayMs: number = MANUAL_CODE_PROMPT_DELAY_MS,
-): () => Promise<string> {
-	const pending = new Promise<string>(() => {});
-	let offered = false;
-	return async () => {
-		if (offered) return pending;
-		offered = true;
-		const timer = Promise.withResolvers<void>();
-		const wake = () => timer.resolve();
-		const handle = setTimeout(wake, delayMs);
-		signal?.addEventListener("abort", wake, { once: true });
-		try {
-			await timer.promise;
-		} finally {
-			clearTimeout(handle);
-			signal?.removeEventListener("abort", wake);
-		}
-		if (isSettled() || signal?.aborted) return pending;
-		try {
-			return await onPrompt({ message: MANUAL_CODE_PROMPT });
-		} catch {
-			return pending;
-		}
-	};
-}
-
-export async function loginGrokBuild(
-	callbacks: OAuthLoginCallbacks,
-	promptDelayMs: number = MANUAL_CODE_PROMPT_DELAY_MS,
-): Promise<OAuthCredentials> {
+export async function loginGrokBuild(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
 	const fetchImpl = callbacks.fetch ?? fetch;
 	// The host only synthesizes a manual prompt for providers in its static
 	// paste-code registry, which extensions cannot join. Grok Build prints the
 	// authorization code in the browser when the loopback callback cannot be
-	// reached, so supply the prompt through the per-caller escape hatch that
-	// `AuthStorage.login` honors for any provider.
-	let settled = false;
+	// reached, so mirror the host's own synthesis (auth-storage.ts) through the
+	// per-caller escape hatch it honors for any provider: the callback flow
+	// races this prompt against the loopback callback from the start.
+	const onPrompt = callbacks.onPrompt;
 	const flowCallbacks: OAuthLoginCallbacks =
-		callbacks.onManualCodeInput || !callbacks.onPrompt
+		callbacks.onManualCodeInput || !onPrompt
 			? callbacks
-			: {
-					...callbacks,
-					onManualCodeInput: lateManualCodePrompt(
-						callbacks.onPrompt,
-						() => settled,
-						callbacks.signal,
-						promptDelayMs,
-					),
-				};
+			: { ...callbacks, onManualCodeInput: () => onPrompt({ message: MANUAL_CODE_PROMPT }) };
 	try {
 		throwIfCancelled(callbacks.signal);
 		const discovery = await discover(fetchImpl, BROWSER_ENDPOINTS, callbacks.signal);
@@ -450,8 +395,6 @@ export async function loginGrokBuild(
 			provider: PROVIDER_ID,
 			cause: error,
 		});
-	} finally {
-		settled = true;
 	}
 }
 
