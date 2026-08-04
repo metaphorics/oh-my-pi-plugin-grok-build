@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Fixed plugin startup on OMP 17.2.7 by registering the custom stream under a private API ID while keeping outbound requests on OpenAI Chat Completions.
+
 ## 0.1.4
 
 - Changed manual OAuth input to redeem the pasted redirect URL or authorization code as an authorization code over PKCE, removing the host paste-code opt-in so no login path submits a redirect URL or code as a refresh token.

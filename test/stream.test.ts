@@ -325,19 +325,8 @@ test("streamGrokBuild rotates to a sibling credential after a 402 quota response
 	expect(captured[1].headers.get("Authorization")).toBe("Bearer token-b");
 });
 
-// Regression for the host mapping failure: a model carrying the custom API
-// name the provider used to register ("xai-grok-build-responses") is rejected
-// by the host stream entrypoint (mapOptionsForApi has no case for it), while a
-// model carrying the built-in "openai-completions" API the provider now
-// registers streams without a custom registry entry.
-test("the retired custom API is rejected by the host stream entrypoint", () => {
-	const retiredModel = buildModel({ ...MODEL, api: "xai-grok-build-responses" } as ModelSpec<Api>) as Model<Api>;
-	expect(() =>
-		streamSimple(retiredModel, CONTEXT, { apiKey: "oauth-access", fetch: async () => completedSse("x") }),
-	).toThrow(/Unhandled API in mapOptionsForApi: xai-grok-build-responses/);
-});
 
-test("the registered openai-completions model streams through the host without an Unhandled API error", async () => {
+test("the inner openai-completions model streams through built-in dispatch", async () => {
 	const registeredModel = buildModel({ ...MODEL, api: "openai-completions" } as ModelSpec<"openai-completions">) as Model<Api>;
 	const result = await streamSimple(registeredModel, CONTEXT, {
 		apiKey: "oauth-access",
