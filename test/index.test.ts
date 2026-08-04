@@ -10,7 +10,7 @@ interface ChildResult {
 	api: string | undefined;
 	handlerIdentitiesMatch: boolean;
 	apiKey: string | undefined;
-	manualInputEnabled: boolean;
+	pasteCodeEnabled: boolean;
 	collisionRegistrationCount: number;
 	collisionLogs: string[];
 }
@@ -43,7 +43,7 @@ const handlerIdentitiesMatch = config !== undefined &&
   config.oauth?.login === loginGrokBuild &&
   config.oauth?.refreshToken === refreshGrokBuildToken;
 const apiKey = config?.oauth?.getApiKey({ access: "access-token", refresh: "refresh-token", expires: 1 });
-const manualInputEnabled = PASTE_CODE_LOGIN_PROVIDERS.has(PROVIDER_ID);
+const pasteCodeEnabled = PASTE_CODE_LOGIN_PROVIDERS.has(PROVIDER_ID);
 
 if (!initialCollision) {
   registerOAuthProvider({
@@ -66,7 +66,7 @@ process.stdout.write(JSON.stringify({
   api: config?.api,
   handlerIdentitiesMatch,
   apiKey,
-  manualInputEnabled,
+  pasteCodeEnabled,
   collisionRegistrationCount,
   collisionLogs,
 }));
@@ -94,7 +94,7 @@ test("provider registration and collision behavior are correct in an isolated re
 	expect(result.api).toBe("openai-completions");
 	expect(result.handlerIdentitiesMatch).toBe(true);
 	expect(result.apiKey).toBe("access-token");
-	expect(result.manualInputEnabled).toBe(true);
+	expect(result.pasteCodeEnabled).toBe(false);
 	expect(result.collisionRegistrationCount).toBe(0);
 	expect(result.collisionLogs).toEqual(["xai-grok-build already provided by host; extension inert"]);
 });

@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.4
+
+- Changed manual OAuth input to redeem the pasted redirect URL or authorization code as an authorization code over PKCE, removing the host paste-code opt-in so no login path submits a redirect URL or code as a refresh token.
+
 ## 0.1.3
 
 - Switched the transport to the built-in OpenAI Chat Completions API (`/v1/chat/completions`), removing the unmappable custom API name so the host no longer throws `Unhandled API in mapOptionsForApi`.

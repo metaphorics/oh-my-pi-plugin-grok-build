@@ -40,24 +40,32 @@ function tokenResponse(refresh?: string): Response {
 }
 
 test.each([
-	["rotated-refresh", "rotated-refresh"],
-	[undefined, "pasted-refresh"],
-] as const)("manual /login token input preserves refresh rotation", async (returnedRefresh, expectedRefresh) => {
-	let tokenForm: URLSearchParams | undefined;
+	{
+		description: "redirect URL",
+		buildInput: (state: string) => `http://127.0.0.1:8086/callback?code=manual-code&state=${state}`,
+	},
+	{ description: "bare authorization code", buildInput: () => "manual-code" },
+])("manual $description input exchanges an authorization code over PKCE", async ({ buildInput }) => {
+	let authorizationUrl = "";
 	let discoveryRedirect: RequestRedirect | undefined;
+	let tokenForm: URLSearchParams | undefined;
 	let tokenRedirect: RequestRedirect | undefined;
 	let userinfoRedirect: RequestRedirect | undefined;
-	let authInstructions: string | undefined;
 	let promptCalls = 0;
 	const callbacks: OAuthLoginCallbacks = {
 		onAuth: info => {
-			authInstructions = info.instructions;
+			authorizationUrl = info.url;
 		},
 		onPrompt: async () => {
 			promptCalls++;
-			throw new Error("browser-first login must not prompt");
+			throw new Error("manual callback input must not prompt");
 		},
-		onManualCodeInput: async () => "  pasted-refresh  ",
+		onManualCodeInput: async () => {
+			// The host parses a pasted redirect URL or raw code into an authorization
+			// code; the state must match the one embedded in the authorization URL.
+			const state = new URL(authorizationUrl).searchParams.get("state") ?? "";
+			return buildInput(state);
+		},
 		fetch: async (input, init) => {
 			const url = String(input);
 			if (url === OAUTH_DISCOVERY_URL) {
@@ -67,29 +75,38 @@ test.each([
 			if (url === DISCOVERY.token_endpoint) {
 				tokenForm = new URLSearchParams(String(init?.body));
 				tokenRedirect = init?.redirect;
-				return tokenResponse(returnedRefresh);
+				return tokenResponse("rotated-refresh");
 			}
 			if (url === DISCOVERY.userinfo_endpoint) {
 				userinfoRedirect = init?.redirect;
-				return Response.json({ sub: "account-123", email: "user@example.com" });
+				return Response.json({ sub: "manual-account", email: "user@example.com" });
 			}
 			throw new Error(`unexpected URL ${url}`);
 		},
 	};
 
 	const credentials = await loginGrokBuild(callbacks);
+	// A pasted redirect URL or code must be redeemed as an authorization code,
+	// never submitted as a refresh_token.
+	const params = new URL(authorizationUrl).searchParams;
+	const verifier = tokenForm?.get("code_verifier") ?? "";
+	const verifierHash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier));
+	const expectedChallenge = Buffer.from(verifierHash).toString("base64url");
+	expect(params.get("code_challenge")).toBe(expectedChallenge);
+	expect(params.get("code_challenge_method")).toBe("S256");
 	expect(Object.fromEntries(tokenForm?.entries() ?? [])).toEqual({
-		grant_type: "refresh_token",
+		grant_type: "authorization_code",
 		client_id: OAUTH_CLIENT_ID,
-		refresh_token: "pasted-refresh",
+		code: "manual-code",
+		code_verifier: expect.any(String),
+		redirect_uri: "http://127.0.0.1:8086/callback",
 	});
 	expect(discoveryRedirect).toBe("error");
 	expect(tokenRedirect).toBe("error");
 	expect(userinfoRedirect).toBe("error");
-	expect(credentials.refresh).toBe(expectedRefresh);
-	expect(credentials.accountId).toBe("account-123");
+	expect(credentials.refresh).toBe("rotated-refresh");
+	expect(credentials.accountId).toBe("manual-account");
 	expect(credentials.email).toBe("user@example.com");
-	expect(authInstructions).toContain("/login <OAuth refresh token>");
 	expect(promptCalls).toBe(0);
 });
 
@@ -126,7 +143,7 @@ test("browser-first login completes PKCE without prompting", async () => {
 	});
 
 	const credentials = await login;
-	expect(authInstructions).toContain("/login <OAuth refresh token>");
+	expect(authInstructions).toBeUndefined();
 	expect(promptCalls).toBe(0);
 	expect(await callbackStatus).toBe(200);
 	const params = new URL(authorizationUrl).searchParams;
@@ -247,4 +264,31 @@ test("refresh failures expose only status and allowlisted OAuth code", async () 
 	expect(error.message).toContain("400 invalid_grant");
 	expect(error.message).not.toContain("was rejected");
 	expect(error.message).not.toContain("secret-refresh");
+});
+
+test("background refresh exchanges the stored refresh token", async () => {
+	let tokenForm: URLSearchParams | undefined;
+	let tokenRedirect: RequestRedirect | undefined;
+	installFetch(async (input, init) => {
+		const url = String(input);
+		if (url === OAUTH_DISCOVERY_URL) return Response.json(DISCOVERY);
+		if (url === DISCOVERY.token_endpoint) {
+			tokenForm = new URLSearchParams(String(init?.body));
+			tokenRedirect = init?.redirect;
+			return tokenResponse("rotated-refresh");
+		}
+		if (url === DISCOVERY.userinfo_endpoint) return Response.json({ sub: "refresh-account" });
+		throw new Error(`unexpected URL ${url}`);
+	});
+
+	const credentials: OAuthCredentials = { access: "old-access", refresh: "stored-refresh", expires: 0 };
+	const refreshed = await refreshGrokBuildToken(credentials);
+	expect(Object.fromEntries(tokenForm?.entries() ?? [])).toEqual({
+		grant_type: "refresh_token",
+		client_id: OAUTH_CLIENT_ID,
+		refresh_token: "stored-refresh",
+	});
+	expect(tokenRedirect).toBe("error");
+	expect(refreshed.access).toBe("access-token");
+	expect(refreshed.refresh).toBe("rotated-refresh");
 });

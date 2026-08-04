@@ -15,8 +15,6 @@ import {
 const ACCESS_TOKEN_CLIENT_SKEW_MS = 5 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
-const MANUAL_REFRESH_INSTRUCTIONS =
-	"Manual fallback: run /login <OAuth refresh token>. This provider expects a refresh token, not a redirect URL.";
 
 interface GrokBuildDiscovery {
 	authorization_endpoint: string;
@@ -280,7 +278,6 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 	#verifier: string;
 	#challenge: string;
 	#fetch: FetchImpl;
-	#manualRefreshToken: { value?: string };
 
 	constructor(
 		callbacks: OAuthLoginCallbacks,
@@ -288,31 +285,16 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 		pkce: { verifier: string; challenge: string },
 		fetchImpl: FetchImpl,
 	) {
-		const manualRefreshToken: { value?: string } = {};
-		const onManualCodeInput = callbacks.onManualCodeInput;
-		super(
-			onManualCodeInput
-				? {
-						...callbacks,
-						onManualCodeInput: async () => {
-							const input = (await onManualCodeInput()).trim();
-							manualRefreshToken.value = input || undefined;
-							return input ? "grok-build-refresh-token" : "";
-						},
-					}
-				: callbacks,
-			{
-				preferredPort: CALLBACK_PORT,
-				allowPortFallback: false,
-				callbackHostname: "127.0.0.1",
-				callbackPath: "/callback",
-			},
-		);
+		super(callbacks, {
+			preferredPort: CALLBACK_PORT,
+			allowPortFallback: false,
+			callbackHostname: "127.0.0.1",
+			callbackPath: "/callback",
+		});
 		this.#discovery = discovery;
 		this.#verifier = pkce.verifier;
 		this.#challenge = pkce.challenge;
 		this.#fetch = fetchImpl;
-		this.#manualRefreshToken = manualRefreshToken;
 	}
 
 	async generateAuthUrl(state: string, redirectUri: string): Promise<{ url: string; instructions?: string }> {
@@ -327,10 +309,7 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 			nonce: crypto.randomUUID(),
 			referrer: OAUTH_REFERRER,
 		});
-		return {
-			url: `${this.#discovery.authorization_endpoint}?${params.toString()}`,
-			instructions: MANUAL_REFRESH_INSTRUCTIONS,
-		};
+		return { url: `${this.#discovery.authorization_endpoint}?${params.toString()}` };
 	}
 
 	generateState(): string {
@@ -339,16 +318,6 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 
 	async exchangeToken(code: string, _state: string, redirectUri: string): Promise<OAuthCredentials> {
 		throwIfCancelled(this.ctrl.signal);
-		const manualRefreshToken = this.#manualRefreshToken.value;
-		if (manualRefreshToken) {
-			const credentials = await exchangeRefreshToken(
-				this.#discovery.token_endpoint,
-				manualRefreshToken,
-				this.#fetch,
-				this.ctrl.signal,
-			);
-			return attachUserInfo(credentials, this.#discovery.userinfo_endpoint, this.#fetch, this.ctrl.signal);
-		}
 		let response: Response;
 		try {
 			response = await this.#fetch(this.#discovery.token_endpoint, {
