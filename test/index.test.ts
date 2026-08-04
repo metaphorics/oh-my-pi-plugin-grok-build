@@ -20,7 +20,7 @@ const childScript = `
 import plugin from ${JSON.stringify(pluginUrl)};
 import { PASTE_CODE_LOGIN_PROVIDERS } from "@oh-my-pi/pi-ai";
 import { getOAuthProviders, registerOAuthProvider } from "@oh-my-pi/pi-ai/oauth";
-import { BASE_URL, CUSTOM_API_ID, PROVIDER_ID } from ${JSON.stringify(new URL("../src/constants.ts", import.meta.url).href)};
+import { BASE_URL, PROVIDER_ID } from ${JSON.stringify(new URL("../src/constants.ts", import.meta.url).href)};
 import { fetchGrokBuildModels } from ${JSON.stringify(new URL("../src/models.ts", import.meta.url).href)};
 import { loginGrokBuild, refreshGrokBuildToken } from ${JSON.stringify(new URL("../src/oauth.ts", import.meta.url).href)};
 import { streamGrokBuild } from ${JSON.stringify(new URL("../src/stream.ts", import.meta.url).href)};
@@ -91,7 +91,7 @@ test("provider registration and collision behavior are correct in an isolated re
 	expect(result.registrationCount).toBe(1);
 	expect(result.registeredProvider).toBe("xai-grok-build");
 	expect(result.baseUrl).toBe("https://cli-chat-proxy.grok.com/v1");
-	expect(result.api).toBe("xai-grok-build-responses");
+	expect(result.api).toBe("openai-completions");
 	expect(result.handlerIdentitiesMatch).toBe(true);
 	expect(result.apiKey).toBe("access-token");
 	expect(result.manualInputEnabled).toBe(true);

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { isUsageLimitOutcome } from "@oh-my-pi/pi-ai";
+import { isUsageLimitOutcome, streamSimple } from "@oh-my-pi/pi-ai";
 import type { Api, ApiKeyResolveContext, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
@@ -10,7 +10,7 @@ import { streamGrokBuild } from "../src/stream.js";
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const MODEL = buildModel({
-	api: "xai-grok-build-responses",
+	api: "openai-completions",
 	provider: "xai-grok-build",
 	id: "grok-4.5",
 	name: "Grok 4.5",
@@ -32,50 +32,34 @@ const MODEL = buildModel({
 const CONTEXT: Context = { messages: [{ role: "user", content: "hi", timestamp: 1 }] };
 
 function completedSse(text: string): Response {
-	const events = [
-		{ type: "response.created", response: { id: "resp_1", status: "in_progress" } },
+	const chunks = [
 		{
-			type: "response.output_item.added",
-			output_index: 0,
-			item: { type: "message", id: "msg_1", role: "assistant", status: "in_progress", content: [] },
-		},
-		{ type: "response.content_part.added", output_index: 0, part: { type: "output_text", text: "" } },
-		{ type: "response.output_text.delta", output_index: 0, delta: text },
-		{
-			type: "response.output_item.done",
-			output_index: 0,
-			item: {
-				type: "message",
-				id: "msg_1",
-				role: "assistant",
-				status: "completed",
-				content: [{ type: "output_text", text }],
-			},
+			id: "chatcmpl_1",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "grok-4.5",
+			choices: [{ index: 0, delta: { role: "assistant", content: text }, finish_reason: null }],
 		},
 		{
-			type: "response.completed",
-			response: {
-				id: "resp_1",
-				status: "completed",
-				usage: {
-					input_tokens: 1,
-					output_tokens: 1,
-					total_tokens: 2,
-					input_tokens_details: { cached_tokens: 0 },
-				},
-			},
+			id: "chatcmpl_1",
+			object: "chat.completion.chunk",
+			created: 1,
+			model: "grok-4.5",
+			choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+			usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
 		},
 	];
-	return new Response(`${events.map(event => `data: ${JSON.stringify(event)}`).join("\n\n")}\n\n`, {
+	return new Response(`${chunks.map(chunk => `data: ${JSON.stringify(chunk)}`).join("\n\n")}\n\n`, {
 		headers: { "content-type": "text/event-stream" },
 	});
 }
 
-interface ResponsesRequestBody {
+interface ChatCompletionsRequestBody {
 	model?: string;
 	stream?: boolean;
-	input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
-	reasoning?: { effort?: string; summary?: string | null };
+	messages?: Array<{ role?: string; content?: string }>;
+	reasoning_effort?: string;
+	stream_options?: { include_usage?: boolean };
 }
 
 interface CapturedRequest {
@@ -86,8 +70,7 @@ interface CapturedRequest {
 	headers: Headers;
 }
 
-test("streaming delegates Responses events and preserves per-session request identity", async () => {
-	expect(MODEL.compat).toBeUndefined();
+test("streaming delegates Chat Completions events and preserves per-session request identity", async () => {
 	const captured: CapturedRequest[] = [];
 	const fetchMock: FetchImpl = async (input, init) => {
 		captured.push({
@@ -120,14 +103,14 @@ test("streaming delegates Responses events and preserves per-session request ide
 	expect(second.content.find(item => item.type === "text")?.text).toBe("second");
 	expect(second.stopReason).not.toBe("error");
 
-	const requestBody = JSON.parse(captured[0].body) as ResponsesRequestBody;
-	expect(captured[0].url).toBe(`${BASE_URL}/responses`);
+	const requestBody = JSON.parse(captured[0].body) as ChatCompletionsRequestBody;
+	expect(captured[0].url).toBe(`${BASE_URL}/chat/completions`);
 	expect(captured[0].method).toBe("POST");
 	expect(captured[0].redirect).toBe("error");
 	expect(requestBody.model).toBe(MODEL.id);
 	expect(requestBody.stream).toBe(true);
-	expect(requestBody.input).toEqual([{ role: "user", content: [{ type: "input_text", text: "hi" }] }]);
-	expect(requestBody.reasoning).toEqual({ effort: "high" });
+	expect(requestBody.messages).toEqual([{ role: "user", content: "hi" }]);
+	expect(requestBody.reasoning_effort).toBe("high");
 
 	const initial = captured[0].headers;
 	expect(initial.get("Authorization")).toBe("Bearer oauth-access");
@@ -340,4 +323,27 @@ test("streamGrokBuild rotates to a sibling credential after a 402 quota response
 	expect(captured).toHaveLength(2);
 	expect(captured[0].headers.get("Authorization")).toBe("Bearer token-a");
 	expect(captured[1].headers.get("Authorization")).toBe("Bearer token-b");
+});
+
+// Regression for the host mapping failure: a model carrying the custom API
+// name the provider used to register ("xai-grok-build-responses") is rejected
+// by the host stream entrypoint (mapOptionsForApi has no case for it), while a
+// model carrying the built-in "openai-completions" API the provider now
+// registers streams without a custom registry entry.
+test("the retired custom API is rejected by the host stream entrypoint", () => {
+	const retiredModel = buildModel({ ...MODEL, api: "xai-grok-build-responses" } as ModelSpec<Api>) as Model<Api>;
+	expect(() =>
+		streamSimple(retiredModel, CONTEXT, { apiKey: "oauth-access", fetch: async () => completedSse("x") }),
+	).toThrow(/Unhandled API in mapOptionsForApi: xai-grok-build-responses/);
+});
+
+test("the registered openai-completions model streams through the host without an Unhandled API error", async () => {
+	const registeredModel = buildModel({ ...MODEL, api: "openai-completions" } as ModelSpec<"openai-completions">) as Model<Api>;
+	const result = await streamSimple(registeredModel, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async () => completedSse("ok"),
+	}).result();
+
+	expect(result.stopReason).not.toBe("error");
+	expect(result.content.find(item => item.type === "text")?.text).toBe("ok");
 });

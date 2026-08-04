@@ -1,6 +1,5 @@
 export const PROVIDER_ID = "xai-grok-build";
 export const PROVIDER_LABEL = "xAI Grok Build";
-export const CUSTOM_API_ID = "xai-grok-build-responses";
 export const BASE_URL = "https://cli-chat-proxy.grok.com/v1";
 export const USER_AGENT = "grok-shell/0.2.93 (linux; x86_64)";
 export const CLIENT_IDENTIFIER = "grok-shell";

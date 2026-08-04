@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Switched the transport to the built-in OpenAI Chat Completions API (`/v1/chat/completions`), removing the unmappable custom API name so the host no longer throws `Unhandled API in mapOptionsForApi`.
+
 ## 0.1.2
 
 - Added multi-account regression coverage: per-account credential identity in the host store, and Authorization rotation through the auth-retry resolver during streaming.

@@ -140,12 +140,12 @@ export function streamGrokBuild(model: Model<Api>, context: Context, options?: S
 		return normalizeQuotaExhaustedResponse(response);
 	}, innerFetch.preconnect ? { preconnect: innerFetch.preconnect } : {});
 
-	const responsesModel = buildModel({
+	const completionsModel = buildModel({
 		...model,
-		api: "openai-responses",
+		api: "openai-completions",
 		compat: model.compatConfig,
-	} as ModelSpec<"openai-responses">) as Model<Api>;
-	return streamSimple(responsesModel, context, {
+	} as ModelSpec<"openai-completions">) as Model<Api>;
+	return streamSimple(completionsModel, context, {
 		...options,
 		providerSessionState,
 		fetch: wrappedFetch,

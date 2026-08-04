@@ -1,6 +1,6 @@
 # oh-my-pi-plugin-grok-build
 
-Standalone [oh-my-pi](https://github.com/can1357/oh-my-pi) extension for the xAI Grok Build subscription provider. It adds OAuth login, authoritative model discovery, and OpenAI Responses streaming with the request identity expected by Grok Build.
+Standalone [oh-my-pi](https://github.com/can1357/oh-my-pi) extension for the xAI Grok Build subscription provider. It adds OAuth login, authoritative model discovery, and OpenAI Chat Completions streaming with the request identity expected by Grok Build.
 
 ## Install
 
