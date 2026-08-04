@@ -3,7 +3,7 @@ import type { FetchImpl } from "@oh-my-pi/pi-ai";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import type { OAuthCredentials, OAuthLoginCallbacks } from "@oh-my-pi/pi-ai/oauth/types";
 import { OAUTH_CLIENT_ID, OAUTH_DISCOVERY_URL, OAUTH_REFERRER, OAUTH_SCOPE } from "../src/constants.js";
-import { loginGrokBuild, refreshGrokBuildToken } from "../src/oauth.js";
+import { lateManualCodePrompt, loginGrokBuild, refreshGrokBuildToken } from "../src/oauth.js";
 
 const DISCOVERY = {
 	authorization_endpoint: "https://auth.x.ai/authorize",
@@ -29,6 +29,23 @@ async function captureError<T>(promise: Promise<T>): Promise<Error> {
 		throw cause;
 	}
 	throw new Error("expected promise to reject");
+}
+
+/**
+ * Drains queued timer turns so a prompt that would fire has already fired.
+ * A duration-based wait would only guess; the queue depth is bounded here.
+ */
+async function isPending(promise: Promise<unknown>): Promise<boolean> {
+	let settled = false;
+	void promise.then(() => {
+		settled = true;
+	});
+	for (let turn = 0; turn < 8 && !settled; turn++) {
+		const flushed = Promise.withResolvers<void>();
+		setTimeout(flushed.resolve, 0);
+		await flushed.promise;
+	}
+	return !settled;
 }
 
 function tokenResponse(refresh?: string): Response {
@@ -110,7 +127,7 @@ test.each([
 	expect(promptCalls).toBe(0);
 });
 
-test("browser-first login offers a manual prompt but completes through the callback", async () => {
+test("browser-first login completes PKCE without prompting", async () => {
 	let authorizationUrl = "";
 	let authInstructions: string | undefined;
 	let promptCalls = 0;
@@ -144,9 +161,9 @@ test("browser-first login offers a manual prompt but completes through the callb
 
 	const credentials = await login;
 	expect(authInstructions).toBeUndefined();
-	// The prompt is offered once so a user whose browser cannot reach the
-	// loopback port can paste the code; the callback still wins the race.
-	expect(promptCalls).toBe(1);
+	// The manual prompt stays unoffered while the loopback callback can still
+	// win, so a working browser login never leaves a prompt outstanding.
+	expect(promptCalls).toBe(0);
 	expect(await callbackStatus).toBe(200);
 	const params = new URL(authorizationUrl).searchParams;
 	expect([...params.keys()].sort()).toEqual(
@@ -187,39 +204,45 @@ test("browser-first login offers a manual prompt but completes through the callb
 	expect(credentials.accountId).toBe("browser-account");
 });
 
-// The browser shows the authorization code when it cannot reach the loopback
-// port. Without a manual prompt the login would hang until the flow times out.
-test("login completes from a pasted code when the callback never arrives", async () => {
-	let promptMessage = "";
-	let tokenForm: URLSearchParams | undefined;
-	const credentials = await loginGrokBuild({
-		onAuth: () => {},
-		onPrompt: async prompt => {
-			promptMessage = prompt.message;
-			return "efar99baLu8zkDakrXoWTsZwgPoxZgekhGBT0iJDSo0OEJbxOgKNlOXOs3Q8qevxvhKkEgVhKk2hV3zxDUVhQw";
+// The browser prints the authorization code when it cannot reach the loopback
+// port. Without this prompt the login hangs until the flow times out.
+test("the late prompt offers the pasted code once the callback window lapses", async () => {
+	const messages: string[] = [];
+	const requestCode = lateManualCodePrompt(
+		async prompt => {
+			messages.push(prompt.message);
+			return "pasted-code";
 		},
-		fetch: async (input, init) => {
-			const url = String(input);
-			if (url === OAUTH_DISCOVERY_URL) return Response.json(DISCOVERY);
-			if (url === DISCOVERY.token_endpoint) {
-				tokenForm = new URLSearchParams(String(init?.body));
-				return tokenResponse("pasted-refresh");
-			}
-			if (url === DISCOVERY.userinfo_endpoint) return Response.json({ sub: "pasted-account" });
-			throw new Error(`unexpected URL ${url}`);
-		},
-	});
+		() => false,
+		undefined,
+		0,
+	);
 
-	expect(promptMessage).toContain("authorization code");
-	expect(Object.fromEntries(tokenForm?.entries() ?? [])).toEqual({
-		grant_type: "authorization_code",
-		client_id: OAUTH_CLIENT_ID,
-		code: "efar99baLu8zkDakrXoWTsZwgPoxZgekhGBT0iJDSo0OEJbxOgKNlOXOs3Q8qevxvhKkEgVhKk2hV3zxDUVhQw",
-		code_verifier: expect.any(String),
-		redirect_uri: "http://127.0.0.1:8086/callback",
-	});
-	expect(credentials.refresh).toBe("pasted-refresh");
-	expect(credentials.accountId).toBe("pasted-account");
+	expect(await requestCode()).toBe("pasted-code");
+	expect(messages).toEqual(["Paste the authorization code (or full redirect URL):"]);
+	// The flow re-invokes manual input until it yields a code; re-prompting
+	// there would spin against a prompt that cannot answer.
+	expect(await isPending(requestCode())).toBe(true);
+	expect(messages).toHaveLength(1);
+});
+
+test.each([
+	{ description: "login already settled", isSettled: () => true, signal: undefined },
+	{ description: "login cancelled", isSettled: () => false, signal: AbortSignal.abort() },
+])("the late prompt stays unoffered when the $description", async ({ isSettled, signal }) => {
+	let promptCalls = 0;
+	const requestCode = lateManualCodePrompt(
+		async () => {
+			promptCalls++;
+			return "unwanted";
+		},
+		isSettled,
+		signal,
+		0,
+	);
+
+	expect(await isPending(requestCode())).toBe(true);
+	expect(promptCalls).toBe(0);
 });
 
 test("a pre-cancelled login does not start discovery", async () => {

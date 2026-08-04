@@ -2,7 +2,7 @@
 
 ## 0.1.6
 
-- Added a manual authorization-code prompt to login, so sign-in still completes when the browser cannot reach the local callback port.
+- Added a manual authorization-code prompt to login. It appears once the local callback port has clearly failed, so sign-in still completes when the browser cannot reach this machine.
 
 ## 0.1.5
 
