@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.6
+
+- Added a manual authorization-code prompt to login, so sign-in still completes when the browser cannot reach the local callback port.
+
 ## 0.1.5
 
 - Fixed plugin startup on OMP 17.2.7 by registering the custom stream under a private API ID while keeping outbound requests on OpenAI Chat Completions.

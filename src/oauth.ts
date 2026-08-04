@@ -15,6 +15,7 @@ import {
 const ACCESS_TOKEN_CLIENT_SKEW_MS = 5 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 20_000;
+const MANUAL_CODE_PROMPT = "Paste the authorization code (or full redirect URL):";
 
 interface GrokBuildDiscovery {
 	authorization_endpoint: string;
@@ -367,14 +368,44 @@ class GrokBuildOAuthFlow extends OAuthCallbackFlow {
 	}
 }
 
+/**
+ * The callback flow re-invokes manual input until it yields a usable code, so a
+ * prompt that rejects immediately (no TTY, dialog dismissed) would spin and
+ * starve the loopback callback. Offer the prompt once, then wait forever so the
+ * callback alone decides the login.
+ */
+function singleManualCodePrompt(onPrompt: NonNullable<OAuthLoginCallbacks["onPrompt"]>): () => Promise<string> {
+	const pending = new Promise<string>(() => {});
+	let offered = false;
+	return async () => {
+		if (offered) return pending;
+		offered = true;
+		try {
+			return await onPrompt({ message: MANUAL_CODE_PROMPT });
+		} catch {
+			return pending;
+		}
+	};
+}
+
 export async function loginGrokBuild(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
 	const fetchImpl = callbacks.fetch ?? fetch;
+	// The host only synthesizes a manual prompt for providers in its static
+	// paste-code registry, which extensions cannot join. Grok Build prints the
+	// authorization code in the browser when the loopback callback cannot be
+	// reached, so supply the prompt through the per-caller escape hatch that
+	// `AuthStorage.login` honors for any provider. The flow races the prompt
+	// against the callback and discards the loser.
+	const flowCallbacks: OAuthLoginCallbacks =
+		callbacks.onManualCodeInput || !callbacks.onPrompt
+			? callbacks
+			: { ...callbacks, onManualCodeInput: singleManualCodePrompt(callbacks.onPrompt) };
 	try {
 		throwIfCancelled(callbacks.signal);
 		const discovery = await discover(fetchImpl, BROWSER_ENDPOINTS, callbacks.signal);
 		const pkce = await generatePKCE();
 		throwIfCancelled(callbacks.signal);
-		return await new GrokBuildOAuthFlow(callbacks, discovery, pkce, fetchImpl).login();
+		return await new GrokBuildOAuthFlow(flowCallbacks, discovery, pkce, fetchImpl).login();
 	} catch (error) {
 		if (error instanceof AIError.OAuthError || error instanceof AIError.LoginCancelledError) throw error;
 		if (error instanceof Error && error.name === "AbortError") throw new AIError.LoginCancelledError();

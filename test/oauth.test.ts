@@ -110,7 +110,7 @@ test.each([
 	expect(promptCalls).toBe(0);
 });
 
-test("browser-first login completes PKCE without prompting", async () => {
+test("browser-first login offers a manual prompt but completes through the callback", async () => {
 	let authorizationUrl = "";
 	let authInstructions: string | undefined;
 	let promptCalls = 0;
@@ -120,7 +120,7 @@ test("browser-first login completes PKCE without prompting", async () => {
 	const login = loginGrokBuild({
 		onPrompt: async () => {
 			promptCalls++;
-			throw new Error("browser-first login must not prompt");
+			throw new Error("no manual input available");
 		},
 		onAuth: info => {
 			authorizationUrl = info.url;
@@ -144,7 +144,9 @@ test("browser-first login completes PKCE without prompting", async () => {
 
 	const credentials = await login;
 	expect(authInstructions).toBeUndefined();
-	expect(promptCalls).toBe(0);
+	// The prompt is offered once so a user whose browser cannot reach the
+	// loopback port can paste the code; the callback still wins the race.
+	expect(promptCalls).toBe(1);
 	expect(await callbackStatus).toBe(200);
 	const params = new URL(authorizationUrl).searchParams;
 	expect([...params.keys()].sort()).toEqual(
@@ -183,6 +185,41 @@ test("browser-first login completes PKCE without prompting", async () => {
 	expect(tokenRedirect).toBe("error");
 	expect(credentials.refresh).toBe("browser-refresh");
 	expect(credentials.accountId).toBe("browser-account");
+});
+
+// The browser shows the authorization code when it cannot reach the loopback
+// port. Without a manual prompt the login would hang until the flow times out.
+test("login completes from a pasted code when the callback never arrives", async () => {
+	let promptMessage = "";
+	let tokenForm: URLSearchParams | undefined;
+	const credentials = await loginGrokBuild({
+		onAuth: () => {},
+		onPrompt: async prompt => {
+			promptMessage = prompt.message;
+			return "efar99baLu8zkDakrXoWTsZwgPoxZgekhGBT0iJDSo0OEJbxOgKNlOXOs3Q8qevxvhKkEgVhKk2hV3zxDUVhQw";
+		},
+		fetch: async (input, init) => {
+			const url = String(input);
+			if (url === OAUTH_DISCOVERY_URL) return Response.json(DISCOVERY);
+			if (url === DISCOVERY.token_endpoint) {
+				tokenForm = new URLSearchParams(String(init?.body));
+				return tokenResponse("pasted-refresh");
+			}
+			if (url === DISCOVERY.userinfo_endpoint) return Response.json({ sub: "pasted-account" });
+			throw new Error(`unexpected URL ${url}`);
+		},
+	});
+
+	expect(promptMessage).toContain("authorization code");
+	expect(Object.fromEntries(tokenForm?.entries() ?? [])).toEqual({
+		grant_type: "authorization_code",
+		client_id: OAUTH_CLIENT_ID,
+		code: "efar99baLu8zkDakrXoWTsZwgPoxZgekhGBT0iJDSo0OEJbxOgKNlOXOs3Q8qevxvhKkEgVhKk2hV3zxDUVhQw",
+		code_verifier: expect.any(String),
+		redirect_uri: "http://127.0.0.1:8086/callback",
+	});
+	expect(credentials.refresh).toBe("pasted-refresh");
+	expect(credentials.accountId).toBe("pasted-account");
 });
 
 test("a pre-cancelled login does not start discovery", async () => {
