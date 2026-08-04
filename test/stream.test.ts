@@ -1,11 +1,16 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { isUsageLimitOutcome, streamSimple } from "@oh-my-pi/pi-ai";
 import type { Api, ApiKeyResolveContext, Context, Effort, FetchImpl, Model, ProviderSessionState } from "@oh-my-pi/pi-ai";
+import { clearCustomApis, registerCustomApi } from "@oh-my-pi/pi-ai/api-registry";
 import * as AIError from "@oh-my-pi/pi-ai/error";
 import { buildModel } from "@oh-my-pi/pi-catalog/build";
 import type { ModelSpec } from "@oh-my-pi/pi-catalog/types";
-import { BASE_URL, CLIENT_IDENTIFIER, CLIENT_VERSION, TOKEN_AUTH, USER_AGENT } from "../src/constants.js";
+import { BASE_URL, CLIENT_IDENTIFIER, CLIENT_VERSION, CUSTOM_API_ID, TOKEN_AUTH, USER_AGENT } from "../src/constants.js";
 import { streamGrokBuild } from "../src/stream.js";
+
+afterEach(() => {
+	clearCustomApis();
+});
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -325,6 +330,26 @@ test("streamGrokBuild rotates to a sibling credential after a 402 quota response
 	expect(captured[1].headers.get("Authorization")).toBe("Bearer token-b");
 });
 
+// The provider registers streamGrokBuild under a private API id, so the host
+// must dispatch that id to the custom stream instead of mapping it as built-in.
+test("a model carrying the registered custom API dispatches to streamGrokBuild", async () => {
+	registerCustomApi(CUSTOM_API_ID, streamGrokBuild);
+	const captured: Headers[] = [];
+	const customModel = buildModel({ ...MODEL, api: CUSTOM_API_ID } as ModelSpec<Api>) as Model<Api>;
+
+	const result = await streamSimple(customModel, CONTEXT, {
+		apiKey: "oauth-access",
+		fetch: async (_input, init) => {
+			captured.push(new Headers(init?.headers));
+			return completedSse("dispatched");
+		},
+	}).result();
+
+	expect(result.content.find(item => item.type === "text")?.text).toBe("dispatched");
+	expect(captured).toHaveLength(1);
+	expect(captured[0].get("x-grok-model-override")).toBe("grok-4.5");
+	expect(captured[0].get("X-XAI-Token-Auth")).toBe(TOKEN_AUTH);
+});
 
 test("the inner openai-completions model streams through built-in dispatch", async () => {
 	const registeredModel = buildModel({ ...MODEL, api: "openai-completions" } as ModelSpec<"openai-completions">) as Model<Api>;
