@@ -413,7 +413,10 @@ export function lateManualCodePrompt(
 	};
 }
 
-export async function loginGrokBuild(callbacks: OAuthLoginCallbacks): Promise<OAuthCredentials> {
+export async function loginGrokBuild(
+	callbacks: OAuthLoginCallbacks,
+	promptDelayMs: number = MANUAL_CODE_PROMPT_DELAY_MS,
+): Promise<OAuthCredentials> {
 	const fetchImpl = callbacks.fetch ?? fetch;
 	// The host only synthesizes a manual prompt for providers in its static
 	// paste-code registry, which extensions cannot join. Grok Build prints the
@@ -426,7 +429,12 @@ export async function loginGrokBuild(callbacks: OAuthLoginCallbacks): Promise<OA
 			? callbacks
 			: {
 					...callbacks,
-					onManualCodeInput: lateManualCodePrompt(callbacks.onPrompt, () => settled, callbacks.signal),
+					onManualCodeInput: lateManualCodePrompt(
+						callbacks.onPrompt,
+						() => settled,
+						callbacks.signal,
+						promptDelayMs,
+					),
 				};
 	try {
 		throwIfCancelled(callbacks.signal);

@@ -245,6 +245,45 @@ test.each([
 	expect(promptCalls).toBe(0);
 });
 
+// End-to-end proof of the wiring: no host manual handler, no callback, and the
+// login still finishes from the code the browser printed.
+test("login completes from a pasted code when the callback never arrives", async () => {
+	const code = "efar99baLu8zkDakrXoWTsZwgPoxZgekhGBT0iJDSo0OEJbxOgKNlOXOs3Q8qevxvhKkEgVhKk2hV3zxDUVhQw";
+	let promptMessage = "";
+	let tokenForm: URLSearchParams | undefined;
+	const credentials = await loginGrokBuild(
+		{
+			onAuth: () => {},
+			onPrompt: async prompt => {
+				promptMessage = prompt.message;
+				return code;
+			},
+			fetch: async (input, init) => {
+				const url = String(input);
+				if (url === OAUTH_DISCOVERY_URL) return Response.json(DISCOVERY);
+				if (url === DISCOVERY.token_endpoint) {
+					tokenForm = new URLSearchParams(String(init?.body));
+					return tokenResponse("pasted-refresh");
+				}
+				if (url === DISCOVERY.userinfo_endpoint) return Response.json({ sub: "pasted-account" });
+				throw new Error(`unexpected URL ${url}`);
+			},
+		},
+		0,
+	);
+
+	expect(promptMessage).toContain("authorization code");
+	expect(Object.fromEntries(tokenForm?.entries() ?? [])).toEqual({
+		grant_type: "authorization_code",
+		client_id: OAUTH_CLIENT_ID,
+		code,
+		code_verifier: expect.any(String),
+		redirect_uri: "http://127.0.0.1:8086/callback",
+	});
+	expect(credentials.refresh).toBe("pasted-refresh");
+	expect(credentials.accountId).toBe("pasted-account");
+});
+
 test("a pre-cancelled login does not start discovery", async () => {
 	const controller = new AbortController();
 	controller.abort();
